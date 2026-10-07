@@ -1,0 +1,887 @@
+{
+  "name": "AI Lead Platform",
+  "nodes": [
+    {
+      "parameters": {
+        "promptType": "define",
+        "text": "=You are an expert inbound lead qualification and scoring assistant for an enterprise agency.\nYour task is to analyze the prospect's submission, score their business fit, and return the result STRICTLY as a valid JSON object. \nDO NOT include any markdown code blocks (no ```json or ```), explanations, or preamble. Return RAW JSON only.\n\n---\nPROSPECT DATA:\n- Full Name: {{ $json.clientName }}\n- Email: {{ $json.cleanEmail }}\n- Link Provided: {{ $json.hasLink }}\n- Website / Profile URL: {{ $json.targetUrl }}\n- Scraped / Source Content: {{ $json.hasLink && $json.data ? $json.data.toString().slice(0, 3500) : 'No external link provided or site is unreachable' }}\n- Extract the prospect's brand or organization name into \"company_name\" based on the scraped content, meta tags, or domain. If it's a personal inquiry with no company, output \"Individual\".\n\n---\nSCORING CRITERIA (score from 0 to 100):\n1. Direct Inbound (No Link): If no website is provided, but valid email and name are present, treat as a warm inbound inquiry. Score between 65 and 75. Category: \"DIRECT_INBOUND\".\n2. B2B / Commercial Fit: If content demonstrates an active business, SaaS, agency, or verified tech project, score between 80 and 95. Category: \"B2B_QUALIFIED\".\n3. Low Fit / Spam: If data contains gibberish, throwaway email domains, or malicious intent, score below 40. Category: \"SPAM_OR_LOW_FIT\".\n\n---\nREQUIRED JSON OUTPUT SCHEMA:\n{\n  \"score\": 85,\n  \"fit_status\": \"HIGH\",\n  \"category\": \"B2B_QUALIFIED\",\n  \"key_insight\": \"Concise 1-2 sentence executive summary of the lead profile.\",\n  \"recommended_angle\": \"Actionable hook or topic to mention during discovery\",\n  \"company_name\": \"Extracted business or organization name (or 'Individual / Unknown' if not found)\",\n}",
+        "batching": {}
+      },
+      "type": "@n8n/n8n-nodes-langchain.chainLlm",
+      "typeVersion": 1.9,
+      "position": [
+        672,
+        0
+      ],
+      "id": "95481692-b3cd-4323-8d5f-23a19d444b03",
+      "name": "Basic LLM Chain"
+    },
+    {
+      "parameters": {
+        "model": "inclusionai/ling-3.0-flash-vl",
+        "options": {}
+      },
+      "type": "@n8n/n8n-nodes-langchain.lmChatOpenRouter",
+      "typeVersion": 1,
+      "position": [
+        736,
+        160
+      ],
+      "id": "16587340-62c3-4d1f-8e03-7de35fd87798",
+      "name": "OpenRouter Chat Model"
+    },
+    {
+      "parameters": {
+        "jsCode": "const output = [];\n\nfor (const item of $input.all()) {\n  // ответ первой модели\n  const rawText = (item.json.text || '').trim();\n\n  // убираем обёртку ```json\n  const cleaned = rawText\n    .replace(/^```json\\s*/i, '')\n    .replace(/^```\\s*/i, '')\n    .replace(/```$/i, '')\n    .trim();\n\n  let parsed = {};\n  try {\n    parsed = JSON.parse(cleaned);\n  } catch (error) {\n    // если модель вернула не JSON\n    parsed = {\n      score: 50,\n      fit_status: 'REVIEW',\n      category: 'PARSE_FALLBACK',\n      key_insight: rawText || 'Не удалось разобрать JSON ответа модели',\n      recommended_angle: 'Требуется ручная проверка контакта'\n    };\n  }\n\n  // данные лида + оценка\n  output.push({\n    json: {\n      ...item.json,\n      ...parsed,\n      // score должен быть числом для узла If\n      score: Number(parsed.score) || 0\n    }\n  });\n}\n\nreturn output;"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1024,
+        0
+      ],
+      "id": "021cd42f-381a-4635-b97e-069b253f56d4",
+      "name": "Code in JavaScript1"
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict",
+            "version": 3
+          },
+          "conditions": [
+            {
+              "id": "a2e8ac3b-5e3c-41b8-a2ec-3c85cffdd21a",
+              "leftValue": "={{$json.score}}",
+              "rightValue": 70,
+              "operator": {
+                "type": "number",
+                "operation": "gt"
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.3,
+      "position": [
+        1264,
+        0
+      ],
+      "id": "a0b3dee5-83ad-4382-90ec-29f6ca85a578",
+      "name": "If"
+    },
+    {
+      "parameters": {
+        "additionalFields": {}
+      },
+      "type": "n8n-nodes-base.telegram",
+      "typeVersion": 1.2,
+      "position": [
+        2080,
+        -144
+      ],
+      "id": "68e108f2-0050-4692-88be-0f0ec0767840",
+      "name": "Send a text message"
+    },
+    {
+      "parameters": {
+        "formTitle": "Contact us",
+        "formFields": {
+          "values": [
+            {
+              "fieldLabel": "Your name",
+              "requiredField": true
+            },
+            {
+              "fieldLabel": "Your e-mail",
+              "fieldType": "email",
+              "requiredField": true
+            },
+            {
+              "fieldLabel": "Your website or portfolio link (optional)"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.formTrigger",
+      "typeVersion": 2.6,
+      "position": [
+        -160,
+        16
+      ],
+      "id": "5cf35b99-4be6-40fe-8845-c2438fa30162",
+      "name": "On form submission"
+    },
+    {
+      "parameters": {
+        "jsCode": "for (const item of $input.all()) {\n  const rawUrl = (item.json['Your website or portfolio link (optional)'] || '').trim();\n  \n  if (rawUrl) {\n    let validUrl = rawUrl;\n    if (!/^https?:\\/\\//i.test(validUrl)) {\n      validUrl = 'https://' + validUrl;\n    }\n    item.json.targetUrl = validUrl;\n    item.json.hasLink = true;\n  } else {\n    item.json.targetUrl = 'https://httpbin.org/get';\n    item.json.hasLink = false;\n  }\n\n  // контакты\n  item.json.cleanEmail = (item.json['Your e-mail'] || '').trim().toLowerCase();\n  item.json.clientName = (item.json['Your name'] || 'Client').trim();\n\n  // поля для Airtable\n  item.json.lead_status = 'New';\n  item.json.lead_source = 'Website';\n  item.json.created_at = new Date().toISOString();\n}\n\nreturn $input.all();"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        32,
+        -192
+      ],
+      "id": "b05ce75c-bf00-4a56-ba3e-09cab5185b5b",
+      "name": "Code in JavaScript"
+    },
+    {
+      "parameters": {
+        "url": "={{ $json.targetUrl }}",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.5,
+      "position": [
+        240,
+        -192
+      ],
+      "id": "452f3808-9427-484a-ac7b-d5e62fe220bb",
+      "name": "HTTP Request"
+    },
+    {
+      "parameters": {
+        "mode": "combine",
+        "combineBy": "combineByPosition",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.merge",
+      "typeVersion": 3.2,
+      "position": [
+        448,
+        0
+      ],
+      "id": "e2a289e2-b88e-4f42-b09e-59c4794cf348",
+      "name": "Merge"
+    },
+    {
+      "parameters": {
+        "promptType": "define",
+        "text": "=You are a senior Business Development Representative (BDR).\nCraft a concise, hyper-personalized first touch email draft to a qualified inbound prospect based on their profile assessment.\n\n---\nLEAD CONTEXT:\n- Name: {{ $json.clientName }}\n- Email: {{ $json.cleanEmail }}\n- Category: {{ $json.category }}\n- Fit Score: {{ $json.score }}/100\n- AI Summary: {{ $json.key_insight }}\n- Strategic Hook: {{ $json.recommended_angle }}\n\n---\nGUIDELINES:\n1. Length: Exactly 3 to 4 punchy sentences. No fluff, no generic opening phrases (never use \"I hope this email finds you well\").\n2. Contextual Hook: Address the prospect by their first name and seamlessly integrate the specific insight from \"Strategic Hook\".\n3. Clear Call to Action (CTA): Propose a low-friction next step (e.g., an intro call or a brief clarifying question).\n4. Output format: Return ONLY the message body. Do not include subject lines, meta-notes, or placeholder brackets.",
+        "batching": {}
+      },
+      "type": "@n8n/n8n-nodes-langchain.chainLlm",
+      "typeVersion": 1.9,
+      "position": [
+        1504,
+        -144
+      ],
+      "id": "21b23dfa-7f3f-4636-a665-de40aea44dbf",
+      "name": "Basic LLM Chain1"
+    },
+    {
+      "parameters": {
+        "model": "inclusionai/ling-3.0-flash-vl",
+        "options": {}
+      },
+      "type": "@n8n/n8n-nodes-langchain.lmChatOpenRouter",
+      "typeVersion": 1,
+      "position": [
+        1568,
+        0
+      ],
+      "id": "2a0871ae-27af-4957-830f-723ecd2f8b56",
+      "name": "OpenRouter Chat Model1"
+    },
+    {
+      "parameters": {
+        "operation": "create",
+        "base": {
+          "__rl": true,
+          "value": "YOUR_AIRTABLE_BASE_ID",
+          "mode": "id"
+        },
+        "table": {
+          "__rl": true,
+          "value": "YOUR_AIRTABLE_TABLE_ID",
+          "mode": "id"
+        },
+        "columns": {
+          "mappingMode": "defineBelow",
+          "value": {
+            "Lead Name": "={{ $('On form submission').item.json['Your name'] }}",
+            "Email": "={{ $('On form submission').item.json['Your e-mail'] }}",
+            "Website": "={{ $('On form submission').item.json['Your website or portfolio link (optional)'] }}",
+            "Lead Source": "Website",
+            "Status": "New",
+            "Category": "={{ $('If').item.json.category }}",
+            "Lead Score": "={{ $('If').item.json.score }}",
+            "AI Summary": "={{ $('Code in JavaScript1').item.json.key_insight }}",
+            "Outreach Draft": "={{ $json.text }}",
+            "Company": "={{ $('Code in JavaScript1').item.json.company_name }}"
+          },
+          "matchingColumns": [],
+          "schema": [
+            {
+              "id": "Lead Name",
+              "displayName": "Lead Name",
+              "required": false,
+              "defaultMatch": false,
+              "canBeUsedToMatch": true,
+              "display": true,
+              "type": "string",
+              "readOnly": false,
+              "removed": false
+            },
+            {
+              "id": "Company",
+              "displayName": "Company",
+              "required": false,
+              "defaultMatch": false,
+              "canBeUsedToMatch": true,
+              "display": true,
+              "type": "string",
+              "readOnly": false,
+              "removed": false
+            },
+            {
+              "id": "Email",
+              "displayName": "Email",
+              "required": false,
+              "defaultMatch": false,
+              "canBeUsedToMatch": true,
+              "display": true,
+              "type": "string",
+              "readOnly": false,
+              "removed": false
+            },
+            {
+              "id": "Phone",
+              "displayName": "Phone",
+              "required": false,
+              "defaultMatch": false,
+              "canBeUsedToMatch": true,
+              "display": true,
+              "type": "string",
+              "readOnly": false,
+              "removed": false
+            },
+            {
+              "id": "Website",
+              "displayName": "Website",
+              "required": false,
+              "defaultMatch": false,
+              "canBeUsedToMatch": true,
+              "display": true,
+              "type": "string",
+              "readOnly": false,
+              "removed": false
+            },
+            {
+              "id": "Lead Source",
+              "displayName": "Lead Source",
+              "required": false,
+              "defaultMatch": false,
+              "canBeUsedToMatch": true,
+              "display": true,
+              "type": "options",
+              "options": [
+                {
+                  "name": "Referral",
+                  "value": "Referral"
+                },
+                {
+                  "name": "Inbound",
+                  "value": "Inbound"
+                },
+                {
+                  "name": "Outbound",
+                  "value": "Outbound"
+                },
+                {
+                  "name": "Event",
+                  "value": "Event"
+                },
+                {
+                  "name": "Website",
+                  "value": "Website"
+                },
+                {
+                  "name": "Other",
+                  "value": "Other"
+                },
+                {
+                  "name": "LinkedIn",
+                  "value": "LinkedIn"
+                }
+              ],
+              "readOnly": false,
+              "removed": false
+            },
+            {
+              "id": "Status",
+              "displayName": "Status",
+              "required": false,
+              "defaultMatch": false,
+              "canBeUsedToMatch": true,
+              "display": true,
+              "type": "options",
+              "options": [
+                {
+                  "name": "New",
+                  "value": "New"
+                },
+                {
+                  "name": "Contacted",
+                  "value": "Contacted"
+                },
+                {
+                  "name": "Qualified",
+                  "value": "Qualified"
+                },
+                {
+                  "name": "Disqualified",
+                  "value": "Disqualified"
+                },
+                {
+                  "name": "Lost",
+                  "value": "Lost"
+                }
+              ],
+              "readOnly": false,
+              "removed": false
+            },
+            {
+              "id": "Outreach Draft",
+              "displayName": "Outreach Draft",
+              "required": false,
+              "defaultMatch": false,
+              "canBeUsedToMatch": true,
+              "display": true,
+              "type": "string",
+              "readOnly": false,
+              "removed": false
+            },
+            {
+              "id": "Lead Score",
+              "displayName": "Lead Score",
+              "required": false,
+              "defaultMatch": false,
+              "canBeUsedToMatch": true,
+              "display": true,
+              "type": "number",
+              "readOnly": false,
+              "removed": false
+            },
+            {
+              "id": "AI Summary",
+              "displayName": "AI Summary",
+              "required": false,
+              "defaultMatch": false,
+              "canBeUsedToMatch": true,
+              "display": true,
+              "type": "string",
+              "readOnly": false,
+              "removed": false
+            },
+            {
+              "id": "Category",
+              "displayName": "Category",
+              "required": false,
+              "defaultMatch": false,
+              "canBeUsedToMatch": true,
+              "display": true,
+              "type": "string",
+              "readOnly": false,
+              "removed": false
+            },
+            {
+              "id": "Assigned Owner",
+              "displayName": "Assigned Owner",
+              "required": false,
+              "defaultMatch": false,
+              "canBeUsedToMatch": true,
+              "display": true,
+              "type": "string",
+              "readOnly": false,
+              "removed": false
+            },
+            {
+              "id": "Deals",
+              "displayName": "Deals",
+              "required": false,
+              "defaultMatch": false,
+              "canBeUsedToMatch": true,
+              "display": true,
+              "type": "array",
+              "readOnly": false,
+              "removed": false
+            },
+            {
+              "id": "Activities",
+              "displayName": "Activities",
+              "required": false,
+              "defaultMatch": false,
+              "canBeUsedToMatch": true,
+              "display": true,
+              "type": "array",
+              "readOnly": false,
+              "removed": false
+            },
+            {
+              "id": "Date Created",
+              "displayName": "Date Created",
+              "required": false,
+              "defaultMatch": false,
+              "canBeUsedToMatch": true,
+              "display": true,
+              "type": "string",
+              "readOnly": true,
+              "removed": true
+            },
+            {
+              "id": "Last Status Change",
+              "displayName": "Last Status Change",
+              "required": false,
+              "defaultMatch": false,
+              "canBeUsedToMatch": true,
+              "display": true,
+              "type": "string",
+              "readOnly": true,
+              "removed": true
+            }
+          ],
+          "attemptToConvertTypes": false,
+          "convertFieldsToString": false
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.airtable",
+      "typeVersion": 2.2,
+      "position": [
+        1872,
+        -144
+      ],
+      "id": "d3fe485d-4642-4691-95da-0a02d6c88ba5",
+      "name": "Create a record"
+    },
+    {
+      "parameters": {
+        "operation": "upsert",
+        "base": {
+          "__rl": true,
+          "value": "YOUR_AIRTABLE_BASE_ID",
+          "mode": "id"
+        },
+        "table": {
+          "__rl": true,
+          "value": "YOUR_AIRTABLE_TABLE_ID",
+          "mode": "id"
+        },
+        "columns": {
+          "mappingMode": "defineBelow",
+          "value": {
+            "Lead Score": "={{ $('Code in JavaScript1').item.json.score }}",
+            "Category": "={{ $('Code in JavaScript1').item.json.category }}",
+            "AI Summary": "={{ $('Code in JavaScript1').item.json.text }}",
+            "Lead Name": "={{ $('Code in JavaScript').item.json['Your name'] }}",
+            "Email": "={{ $('Code in JavaScript').item.json['Your e-mail'] }}",
+            "Lead Source": "={{ $('Code in JavaScript').item.json.lead_source }}",
+            "Status": "={{ $('Code in JavaScript').item.json.lead_status }}",
+            "Website": "={{ $('Code in JavaScript').item.json.targetUrl }}",
+            "Outreach Draft": "={{ $json.text }}"
+          },
+          "matchingColumns": [
+            "id"
+          ],
+          "schema": [
+            {
+              "id": "id",
+              "displayName": "id",
+              "required": false,
+              "defaultMatch": true,
+              "display": true,
+              "type": "string",
+              "readOnly": true,
+              "removed": false
+            },
+            {
+              "id": "Lead Name",
+              "displayName": "Lead Name",
+              "required": false,
+              "defaultMatch": false,
+              "canBeUsedToMatch": true,
+              "display": true,
+              "type": "string",
+              "readOnly": false,
+              "removed": false
+            },
+            {
+              "id": "Company",
+              "displayName": "Company",
+              "required": false,
+              "defaultMatch": false,
+              "canBeUsedToMatch": true,
+              "display": true,
+              "type": "string",
+              "readOnly": false,
+              "removed": false
+            },
+            {
+              "id": "Email",
+              "displayName": "Email",
+              "required": false,
+              "defaultMatch": false,
+              "canBeUsedToMatch": true,
+              "display": true,
+              "type": "string",
+              "readOnly": false,
+              "removed": false
+            },
+            {
+              "id": "Phone",
+              "displayName": "Phone",
+              "required": false,
+              "defaultMatch": false,
+              "canBeUsedToMatch": true,
+              "display": true,
+              "type": "string",
+              "readOnly": false,
+              "removed": false
+            },
+            {
+              "id": "Website",
+              "displayName": "Website",
+              "required": false,
+              "defaultMatch": false,
+              "canBeUsedToMatch": true,
+              "display": true,
+              "type": "string",
+              "readOnly": false,
+              "removed": false
+            },
+            {
+              "id": "Lead Source",
+              "displayName": "Lead Source",
+              "required": false,
+              "defaultMatch": false,
+              "canBeUsedToMatch": true,
+              "display": true,
+              "type": "options",
+              "options": [
+                {
+                  "name": "Referral",
+                  "value": "Referral"
+                },
+                {
+                  "name": "Inbound",
+                  "value": "Inbound"
+                },
+                {
+                  "name": "Outbound",
+                  "value": "Outbound"
+                },
+                {
+                  "name": "Event",
+                  "value": "Event"
+                },
+                {
+                  "name": "Website",
+                  "value": "Website"
+                },
+                {
+                  "name": "Other",
+                  "value": "Other"
+                },
+                {
+                  "name": "LinkedIn",
+                  "value": "LinkedIn"
+                }
+              ],
+              "readOnly": false,
+              "removed": false
+            },
+            {
+              "id": "Status",
+              "displayName": "Status",
+              "required": false,
+              "defaultMatch": false,
+              "canBeUsedToMatch": true,
+              "display": true,
+              "type": "options",
+              "options": [
+                {
+                  "name": "New",
+                  "value": "New"
+                },
+                {
+                  "name": "Contacted",
+                  "value": "Contacted"
+                },
+                {
+                  "name": "Qualified",
+                  "value": "Qualified"
+                },
+                {
+                  "name": "Disqualified",
+                  "value": "Disqualified"
+                },
+                {
+                  "name": "Lost",
+                  "value": "Lost"
+                }
+              ],
+              "readOnly": false,
+              "removed": false
+            },
+            {
+              "id": "Outreach Draft",
+              "displayName": "Outreach Draft",
+              "required": false,
+              "defaultMatch": false,
+              "canBeUsedToMatch": true,
+              "display": true,
+              "type": "string",
+              "readOnly": false,
+              "removed": false
+            },
+            {
+              "id": "Lead Score",
+              "displayName": "Lead Score",
+              "required": false,
+              "defaultMatch": false,
+              "canBeUsedToMatch": true,
+              "display": true,
+              "type": "number",
+              "readOnly": false,
+              "removed": false
+            },
+            {
+              "id": "AI Summary",
+              "displayName": "AI Summary",
+              "required": false,
+              "defaultMatch": false,
+              "canBeUsedToMatch": true,
+              "display": true,
+              "type": "string",
+              "readOnly": false,
+              "removed": false
+            },
+            {
+              "id": "Category",
+              "displayName": "Category",
+              "required": false,
+              "defaultMatch": false,
+              "canBeUsedToMatch": true,
+              "display": true,
+              "type": "string",
+              "readOnly": false,
+              "removed": false
+            },
+            {
+              "id": "Assigned Owner",
+              "displayName": "Assigned Owner",
+              "required": false,
+              "defaultMatch": false,
+              "canBeUsedToMatch": true,
+              "display": true,
+              "type": "string",
+              "readOnly": false,
+              "removed": false
+            },
+            {
+              "id": "Deals",
+              "displayName": "Deals",
+              "required": false,
+              "defaultMatch": false,
+              "canBeUsedToMatch": true,
+              "display": true,
+              "type": "array",
+              "readOnly": false,
+              "removed": false
+            },
+            {
+              "id": "Activities",
+              "displayName": "Activities",
+              "required": false,
+              "defaultMatch": false,
+              "canBeUsedToMatch": true,
+              "display": true,
+              "type": "array",
+              "readOnly": false,
+              "removed": false
+            },
+            {
+              "id": "Date Created",
+              "displayName": "Date Created",
+              "required": false,
+              "defaultMatch": false,
+              "canBeUsedToMatch": true,
+              "display": true,
+              "type": "string",
+              "readOnly": true,
+              "removed": true
+            },
+            {
+              "id": "Last Status Change",
+              "displayName": "Last Status Change",
+              "required": false,
+              "defaultMatch": false,
+              "canBeUsedToMatch": true,
+              "display": true,
+              "type": "string",
+              "readOnly": true,
+              "removed": true
+            }
+          ],
+          "attemptToConvertTypes": false,
+          "convertFieldsToString": false
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.airtable",
+      "typeVersion": 2.2,
+      "position": [
+        1536,
+        144
+      ],
+      "id": "c0966686-0c8a-4ca4-b537-015da3ad6332",
+      "name": "Create or update a record"
+    }
+  ],
+  "pinData": {},
+  "connections": {
+    "Basic LLM Chain": {
+      "main": [
+        [
+          {
+            "node": "Code in JavaScript1",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "OpenRouter Chat Model": {
+      "ai_languageModel": [
+        [
+          {
+            "node": "Basic LLM Chain",
+            "type": "ai_languageModel",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "If": {
+      "main": [
+        [
+          {
+            "node": "Basic LLM Chain1",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Create or update a record",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Code in JavaScript1": {
+      "main": [
+        [
+          {
+            "node": "If",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "On form submission": {
+      "main": [
+        [
+          {
+            "node": "Code in JavaScript",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Code in JavaScript": {
+      "main": [
+        [
+          {
+            "node": "HTTP Request",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "Merge",
+            "type": "main",
+            "index": 1
+          }
+        ]
+      ]
+    },
+    "HTTP Request": {
+      "main": [
+        [
+          {
+            "node": "Merge",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Merge": {
+      "main": [
+        [
+          {
+            "node": "Basic LLM Chain",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Basic LLM Chain1": {
+      "main": [
+        [
+          {
+            "node": "Create a record",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "OpenRouter Chat Model1": {
+      "ai_languageModel": [
+        [
+          {
+            "node": "Basic LLM Chain1",
+            "type": "ai_languageModel",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Create a record": {
+      "main": [
+        []
+      ]
+    }
+  },
+  "active": false,
+  "settings": {
+    "executionOrder": "v1",
+    "binaryMode": "separate"
+  },
+  "meta": {
+    "templateCredsSetupCompleted": false
+  }
+}
